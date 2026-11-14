@@ -3,15 +3,28 @@
 <head>
 <meta charset="utf-8">
 <title>Fart Ninja</title>
-<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#0d0b1a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <style>
-  html, body { margin: 0; height: 100%; background: #0d0b1a; overflow: hidden; }
-  body { display: flex; align-items: center; justify-content: center; touch-action: none; user-select: none; -webkit-user-select: none; }
-  canvas { display: block; image-rendering: pixelated; image-rendering: crisp-edges; cursor: pointer; }
+  html, body { margin: 0; height: 100%; background: #0d0b1a; overflow: hidden; overscroll-behavior: none; }
+  body {
+    position: fixed; inset: 0; box-sizing: border-box;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+  }
+  canvas { display: block; image-rendering: pixelated; image-rendering: crisp-edges; cursor: pointer; touch-action: none; }
+  #rotate { display: none; margin: 0; padding: 0 24px; color: #a99ad6; font: 15px/1.45 system-ui, sans-serif; text-align: center; }
+  @media (orientation: portrait) and (pointer: coarse) { #rotate { display: block; } }
 </style>
 </head>
 <body>
 <canvas id="game" width="384" height="216"></canvas>
+<p id="rotate">Tap anywhere to jump.<br>Turn your phone sideways for a bigger game.</p>
 <script>
 (() => {
 'use strict';
@@ -27,14 +40,32 @@ const GRAV = 860, JUMP_V = -300, BOOST_V = -270;
 const cv = document.getElementById('game');
 const ctx = cv.getContext('2d');
 
-function fit() {
-  const r = Math.min(innerWidth / VW, innerHeight / VH);
-  const s = r >= 1 ? Math.floor(r) : r;
-  cv.style.width = Math.floor(VW * s) + 'px';
-  cv.style.height = Math.floor(VH * s) + 'px';
+function fit() {                                  // fill the screen; snap to whole device pixels so the art stays crisp
+  const vv = window.visualViewport, dpr = window.devicePixelRatio || 1;
+  let W = vv ? vv.width : innerWidth, H = vv ? vv.height : innerHeight;
+  try {
+    const cs = getComputedStyle(document.body);   // notch / home-bar safe areas
+    W -= parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+    H -= parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+  } catch (e) {}
+  let s = Math.min(W / VW, H / VH);
+  const snapped = Math.floor(s * dpr) / dpr;
+  if (snapped > 0.85 * s) s = snapped;            // otherwise the snap would waste too much screen: scale smoothly
+  cv.style.width = VW * s + 'px';
+  cv.style.height = VH * s + 'px';
 }
 addEventListener('resize', fit);
+addEventListener('orientationchange', () => setTimeout(fit, 250));
+if (window.visualViewport) visualViewport.addEventListener('resize', fit);
 fit();
+
+let touch = !!(window.matchMedia && matchMedia('(pointer: coarse)').matches);   // phone / tablet: show touch wording
+const stop = e => e.preventDefault();
+addEventListener('touchstart', stop, { passive: false });      // no scroll-bounce, double-tap zoom or long-press menu
+addEventListener('touchmove', stop, { passive: false });
+addEventListener('gesturestart', stop);
+addEventListener('contextmenu', stop);
+addEventListener('dblclick', stop);
 
 function rng(seed) {           // mulberry32
   let a = seed >>> 0;
@@ -261,6 +292,13 @@ function audioInit() {
   if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
   try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { ac = null; }
 }
+addEventListener('touchend', audioInit);
+addEventListener('pointerup', audioInit);
+if (document.addEventListener) document.addEventListener('visibilitychange', () => {
+  if (!ac) return;
+  if (document.hidden) ac.suspend(); else ac.resume();
+});
+const buzz = ms => { try { if (navigator.vibrate) navigator.vibrate(ms); } catch (e) {} };
 function sfxFart(big) {
   if (!ac || muted) return;
   const t = ac.currentTime, d = big ? 0.42 : 0.26, f0 = big ? 72 : 98;
@@ -662,7 +700,9 @@ const scoreNow = () => distM() + S.beanCount * BEAN_PTS;
 let sel = 'city';                               // level chosen on the splash screen
 try { if (localStorage.getItem('fartNinjaLevel') === 'jungle') sel = 'jungle'; } catch (e) {}
 const CARDS = { city: { x: 172, y: 98, w: 98, h: 60 }, jungle: { x: 278, y: 98, w: 98, h: 60 } };
-const MENU_BTN = { x: 146, y: 140, w: 92, h: 13 };
+const MENU_BTN = { x: 146, y: 141, w: 92, h: 17 };
+const SND_BTN = { x: 5, y: 23, w: 15, h: 11 };   // sound on/off, top-left (out of the way of thumbs)
+const grow = (b, m) => ({ x: b.x - m, y: b.y - m, w: b.w + m * 2, h: b.h + m * 2 });
 
 function newLevel(seed, biome) {
   if (seed === undefined) seed = (Math.random() * 0x10000) | 0;
@@ -733,12 +773,14 @@ function canvasPoint(e) {
 }
 addEventListener('pointerdown', e => {
   e.preventDefault();
+  if (e.pointerType === 'touch') touch = true;
   const pt = canvasPoint(e);
+  if (inBox(pt, grow(SND_BTN, 9))) { audioInit(); muted = !muted; return; }
   if (S.mode === 'splash') {                    // tap a level card to play it; anywhere else just wakes the audio
     audioInit();
     for (const b in CARDS) if (inBox(pt, CARDS[b])) { setSel(b); startRun(); }
   }
-  else if (S.mode === 'dead' && inBox(pt, MENU_BTN)) toSplash();
+  else if (S.mode === 'dead' && inBox(pt, grow(MENU_BTN, 8))) toSplash();
   else press();
 });
 addEventListener('pointermove', e => {
@@ -755,6 +797,7 @@ const overlap = (ax, ay, aw, ah, bx, by, bw, bh) => ax < bx + bw && ax + aw > bx
 function die(why, noBounce) {
   const p = S.p;
   S.mode = 'dead'; S.why = why; S.lock = 0.45; S.shake = 0.3;
+  buzz(70);
   if (!noBounce) p.vy = -230;
   const sc = scoreNow();
   if (sc > best) { best = sc; S.newBest = true; try { localStorage.setItem('fartNinjaBestScore', best); } catch (e) {} }
@@ -1204,6 +1247,14 @@ function drawOldMan(e, x) {
   }
 }
 
+function drawSound() {                            // speaker icon: tap to mute
+  const x = SND_BTN.x, y = SND_BTN.y, c = muted ? '#8f7fc4' : '#e6dcff';
+  rect(x - 2, y - 2, SND_BTN.w + 3, SND_BTN.h + 4, '#14132b');
+  rect(x, y + 3, 3, 3, c); rect(x + 3, y + 2, 1, 5, c); rect(x + 4, y + 1, 1, 7, c); rect(x + 5, y, 1, 9, c);
+  if (muted) for (let i = 0; i < 5; i++) { rect(x + 8 + i, y + 2 + i, 1, 1, '#ff6b5e'); rect(x + 12 - i, y + 2 + i, 1, 1, '#ff6b5e'); }
+  else { rect(x + 7, y + 3, 1, 3, c); rect(x + 9, y + 2, 1, 5, c); rect(x + 11, y + 1, 1, 7, c); }
+}
+
 function bigBlob(cx, cy, r, col) {                // chunky pixel circle
   ctx.fillStyle = col;
   cx = Math.round(cx); cy = Math.round(cy);
@@ -1258,11 +1309,14 @@ function drawSplash() {
   text('SELECT YOUR LEVEL', 174, 88, '#ffffff');
   drawCard('city', sel === 'city');
   drawCard('jungle', sel === 'jungle');
-  if (((S.t * 2) | 0) % 2) text('LEFT OR RIGHT TO CHOOSE - SPACE TO START', 174, 164, '#ffd76a');
-  text('OR TAP A LEVEL', 174, 173, '#e6dcff');
-  textC('HOLD TO JUMP HIGHER - PRESS AGAIN IN THE AIR FOR A BOOST', 195, '#e6dcff');
-  textC('GRAB CANS OF BEANS FOR POINTS AND EXTRA GAS. M TO MUTE.', 205, '#e6dcff');
-  if (muted) text('MUTED', 300, 20, '#a99ad6');
+  if (touch) { if (((S.t * 2) | 0) % 2) text('TAP A LEVEL TO START', 174, 166, '#ffd76a', 2); }
+  else {
+    if (((S.t * 2) | 0) % 2) text('LEFT OR RIGHT TO CHOOSE - SPACE TO START', 174, 164, '#ffd76a');
+    text('OR TAP A LEVEL', 174, 173, '#e6dcff');
+  }
+  textC(touch ? 'TAP TO JUMP. HOLD TO JUMP HIGHER. TAP AGAIN IN THE AIR TO BOOST.' : 'HOLD TO JUMP HIGHER - PRESS AGAIN IN THE AIR FOR A BOOST', 195, '#e6dcff');
+  textC(touch ? 'GRAB CANS OF BEANS FOR POINTS AND EXTRA GAS.' : 'GRAB CANS OF BEANS FOR POINTS AND EXTRA GAS. M TO MUTE.', 205, '#e6dcff');
+  drawSound();
 }
 
 function draw() {
@@ -1446,7 +1500,7 @@ function draw() {
   }
   blit(CAN, VW - 44, 15);
   text('X' + S.beanCount, VW - 33, 17, '#ffd76a');
-  if (muted) text('MUTED', VW - 44, 28, '#a99ad6');
+  drawSound();
   if (S.mode === 'play' && S.banner.t > 0 && ((S.banner.t * 6) | 0) % 2) textC(S.banner.s, 40, '#dcff72', 3);
 
   if (S.mode === 'dead') {
@@ -1454,10 +1508,10 @@ function draw() {
     textC(S.why, 84, '#ffffff');
     textC('SCORE ' + score + ' - ' + dist + 'M - ' + S.beanCount + ' BEANS', 96, '#e6dcff');
     if (S.newBest) textC('NEW BEST!', 108, '#dcff72', 2);
-    if (S.lock <= 0 && ((S.t * 2) | 0) % 2) textC('PRESS SPACE OR TAP TO RUN AGAIN', 124, '#ffd76a');
+    if (S.lock <= 0 && ((S.t * 2) | 0) % 2) textC(touch ? 'TAP TO RUN AGAIN' : 'PRESS SPACE OR TAP TO RUN AGAIN', touch ? 125 : 126, '#ffd76a', touch ? 2 : 1);
     rect(MENU_BTN.x, MENU_BTN.y, MENU_BTN.w, MENU_BTN.h, '#14132b');
     rect(MENU_BTN.x + 1, MENU_BTN.y + 1, MENU_BTN.w - 2, MENU_BTN.h - 2, '#4b2f6c');
-    textC('ESC - CHANGE LEVEL', MENU_BTN.y + 4, '#e6dcff', 1, null);
+    textC(touch ? 'CHANGE LEVEL' : 'ESC - CHANGE LEVEL', MENU_BTN.y + 6, '#e6dcff', 1, null);
   }
 }
 
@@ -1474,7 +1528,7 @@ function frame(ts) {
 }
 requestAnimationFrame(frame);
 
-window.__fartNinja = { get S() { return S; }, update, draw, press, release, newLevel, STEP, speedAt, distM, scoreNow, musicStep, jungleStep, menuStep, musicTick, setSel, startRun, toSplash, get mus() { return mus; }, get ac() { return ac; } };
+window.__fartNinja = { get S() { return S; }, update, draw, press, release, newLevel, STEP, speedAt, distM, scoreNow, setTouch: v => { touch = v; }, musicStep, jungleStep, menuStep, musicTick, setSel, startRun, toSplash, get mus() { return mus; }, get ac() { return ac; } };
 })();
 </script>
 </body>
