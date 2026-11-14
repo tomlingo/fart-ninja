@@ -264,6 +264,51 @@ const TIGER_LEGS = [
 ];
 const TIGER = TIGER_LEGS.map(l => spr(TIGER_BODY.concat(l)));
 
+// Up on their hind legs, swiping at the ninja overhead: [paws raised, paws slashing down]
+const DOG_REAR_LOW = [
+  '...drrrd.....',
+  '...ddddddd...',
+  '...ddeeddd...',
+  '...ddeeedd...',
+  '...dtteedd..e',
+  '...dtttedd.e.',
+  '...dtttddde..',
+  '...ddttddd...',
+  '....ddddddd..',
+  '....dddddddd.',
+  '....ddd.dddd.',
+  '....dd...ddd.',
+  '....dd...dd..',
+  '...ddd..ddd..',
+  '...ee...ee...'
+];
+const DOG_REAR = [
+  spr(['tt..e.e......', 'dd.ddddd.....', 'dddddkddd....', 'ttdddddd.....', '.ttddddd.....'].concat(DOG_REAR_LOW)),
+  spr(['....e.e......', '...ddddd.....', '..dddkddd....', 'ttdddddd.....', '.ttddddd.....', '...drrrd.....', 'tdddddddddd..', 't.dddeeddd...'].concat(DOG_REAR_LOW.slice(3)))
+];
+const TIGER_REAR_LOW = [
+  '...TTKTTT......',
+  '...TTTTTTTT....',
+  '...TWWTKTTT....',
+  '...TWWWTTTT....',
+  '...TWWWKTTT..T.',
+  '...TWWWTTTT.K..',
+  '...TWWWKTTTT...',
+  '...TTWWTTTT....',
+  '....TTTKTTTT...',
+  '....TTTTTTTTT..',
+  '....TTTKTTTTT..',
+  '....TTT..TTTT..',
+  '....TT....TTT..',
+  '....TT....TT...',
+  '...TTT...TTT...',
+  '...WW....WW....'
+];
+const TIGER_REAR = [
+  spr(['WW...T.T.......', 'TT..TTTTT......', 'TTTTTTKTTT.....', '.WWTTTTTTT.....', '.WWWTTTTT......'].concat(TIGER_REAR_LOW)),
+  spr(['.....T.T.......', '....TTTTT......', '...TTTKTTT.....', '.WWTTTTTTT.....', '.WWWTTTTT......', '...TTKTTT......', 'WTTTTTTTTTT....', 'W..TWWTKTTT....'].concat(TIGER_REAR_LOW.slice(3)))
+];
+
 const MOSSBOT_BODY = [                 // a wreck: dented head, empty eye socket, open chest, one arm torn off
   '....a.........',
   '.....O........',
@@ -1030,9 +1075,9 @@ function update(dt) {
     if (e.k === 'dog') {
       if (!e.run && e.x - p.x < 230) e.run = true;
       if (e.fall) { e.vy = (e.vy || 0) + GRAV * dt; e.y += e.vy * dt; continue; }
-      if (e.run) { e.x -= 85 * dt; if (gapAt(e.x + 4, e.x + 14)) e.fall = true; }
-      // ninja passing overhead: bark and take a swipe at him
-      if (!e.swiped && p.y + p.h < e.y && p.x + 12 > e.x - 14 && p.x < e.x + e.w) { e.swiped = true; e.swipe = J ? 0.5 : 0.34; if (J) sfxGrowl(); else sfxBark(); }
+      if (e.run && !(e.swipe > 0)) { e.x -= 85 * dt; if (gapAt(e.x + 4, e.x + 14)) e.fall = true; }   // it stops to rear up
+      // ninja in the air and about to pass overhead: rear up on the hind legs, bark and swipe at him
+      if (!e.swiped && p.y + p.h < e.y && p.x + 12 > e.x - 40 && p.x < e.x + e.w) { e.swiped = true; e.swipe = J ? 0.7 : 0.6; if (J) sfxGrowl(); else sfxBark(); }
       if (e.swipe > 0) e.swipe -= dt;
     } else if (e.k === 'big') {                 // too tall for one jump; bellows when it spots the ninja
       if (!e.seen && e.x - p.x < 300) {
@@ -1058,7 +1103,7 @@ function update(dt) {
         if (near && !e.warned) { e.warned = true; sfxTone([220, 330, 440], 0.05, 'square', 0.06); }
       }
     }
-    const top = e.y - (J ? 0 : (e.up || 0) * ARM_REACH) - (e.swipe > 0 ? 6 : 0);   // raised arms / a swiping paw reach higher
+    const top = e.y - (J ? 0 : (e.up || 0) * ARM_REACH) - (e.swipe > 0 ? 9 : 0);   // raised arms / a swiping paw reach higher
     if (overlap(hx, p.y + 2, hw, p.h - 3, e.x + 2, top + 2, e.w - 4, e.y + e.h - top - 2)) {
       die(e.k === 'dog' ? (J ? 'MAULED BY A TIGER' : 'BITTEN BY A GUARD DOG') : e.k === 'big' ? (J ? 'CHOMPED BY A T-REX' : 'HAMMERED BY AN OLD MAN') : J ? 'GRABBED BY A MOSSY ROBOT' : 'ZAPPED BY A ROBOT');
       return;
@@ -1564,15 +1609,12 @@ function draw() {
     if (e.k === 'big') { if (J) drawRex(e, x); else drawOldMan(e, x); continue; }
     const fr = ((S.t * (e.k === 'dog' ? 10 : 5)) | 0) % 2;
     if (e.k === 'dog') {
-      blit((J ? TIGER : DOG)[e.run ? fr : 0], x, e.y);
-      if (e.swipe > 0 && !e.fall) {
-        const rx = Math.round(x), k = e.swipe > 0.17 ? 0 : 2;
-        rect(rx + 5, e.y - 4, 2, 7, J ? '#f08a24' : '#a8652f');                      // raised foreleg
-        rect(rx + 4, e.y - 6, 4, 2, J ? '#fff3d6' : '#e3a868');                      // paw
-        rect(rx + 3, e.y - 7, 1, 1, '#ffffff'); rect(rx + 5, e.y - 8, 1, 1, '#ffffff'); rect(rx + 7, e.y - 7, 1, 1, '#ffffff');
-        for (let i = 0; i < 3; i++) for (let j = 0; j < 4; j++) rect(rx + 1 + i * 3 + j - k, e.y - 17 + j + k, 1, 1, '#ffffff');   // claw slashes
-        text(J ? 'GRRR!' : 'WOOF!', rx - 1, e.y - 27, J ? '#ff9a4a' : '#ffd76a');
+      if (e.swipe > 0 && !e.fall) {                        // reared up, forepaws going up and down
+        const rear = (J ? TIGER_REAR : DOG_REAR)[((S.t * 9) | 0) % 2], rx = Math.round(x) + e.w - rear.w, ry = e.y + e.h - rear.h;
+        blit(rear, rx, ry);
+        text(J ? 'GRRR!' : 'WOOF!', rx - 3, ry - 9, J ? '#ff9a4a' : '#ffd76a');
       }
+      else blit((J ? TIGER : DOG)[e.run ? fr : 0], x, e.y);
       if (!e.run && ((S.t * 3) | 0) % 2) text('!', Math.round(x) + 2, e.y - 8, '#ffd76a');
     } else if (J) {
       const rx = Math.round(x);
