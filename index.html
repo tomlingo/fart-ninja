@@ -702,6 +702,26 @@ try { if (localStorage.getItem('fartNinjaLevel') === 'jungle') sel = 'jungle'; }
 const CARDS = { city: { x: 172, y: 98, w: 98, h: 60 }, jungle: { x: 278, y: 98, w: 98, h: 60 } };
 const MENU_BTN = { x: 146, y: 141, w: 92, h: 17 };
 const SND_BTN = { x: 5, y: 23, w: 15, h: 11 };   // sound on/off, top-left (out of the way of thumbs)
+const FS_BTN = { x: 30, y: 23, w: 13, h: 11 };   // fullscreen toggle, next to it
+const fsRoot = document.documentElement;
+const canFS = !!(fsRoot && (fsRoot.requestFullscreen || fsRoot.webkitRequestFullscreen));   // not offered on iPhone
+const isFS = () => !!(document.fullscreenElement || document.webkitFullscreenElement);
+function toggleFS() {
+  if (!canFS) return;
+  try {
+    if (isFS()) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    else {
+      const r = (fsRoot.requestFullscreen || fsRoot.webkitRequestFullscreen).call(fsRoot);
+      const lock = () => { try { const l = screen.orientation.lock('landscape'); if (l && l.catch) l.catch(() => {}); } catch (e) {} };
+      if (r && r.then) r.then(lock, () => {}); else lock();      // on phones, also turn the game sideways
+    }
+  } catch (e) {}
+}
+if (document.addEventListener) {
+  document.addEventListener('fullscreenchange', () => setTimeout(fit, 60));
+  document.addEventListener('webkitfullscreenchange', () => setTimeout(fit, 60));
+}
+let fsArmed = false;
 const grow = (b, m) => ({ x: b.x - m, y: b.y - m, w: b.w + m * 2, h: b.h + m * 2 });
 
 function newLevel(seed, biome) {
@@ -763,6 +783,7 @@ addEventListener('keydown', e => {
   }
   else if (JUMP_KEYS.includes(e.code)) { e.preventDefault(); if (!e.repeat) press(); }
   else if (e.code === 'KeyM') muted = !muted;
+  else if (e.code === 'KeyF') toggleFS();
   else if ((e.code === 'Escape' || e.code === 'Backspace') && S.mode !== 'splash') { e.preventDefault(); toSplash(); }
 });
 addEventListener('keyup', e => { if (JUMP_KEYS.includes(e.code)) release(); });
@@ -775,7 +796,8 @@ addEventListener('pointerdown', e => {
   e.preventDefault();
   if (e.pointerType === 'touch') touch = true;
   const pt = canvasPoint(e);
-  if (inBox(pt, grow(SND_BTN, 9))) { audioInit(); muted = !muted; return; }
+  if (inBox(pt, grow(SND_BTN, 7))) { audioInit(); muted = !muted; return; }
+  if (canFS && inBox(pt, grow(FS_BTN, 6))) { fsArmed = true; return; }   // acts on release: browsers only allow fullscreen then
   if (S.mode === 'splash') {                    // tap a level card to play it; anywhere else just wakes the audio
     audioInit();
     for (const b in CARDS) if (inBox(pt, CARDS[b])) { setSel(b); startRun(); }
@@ -788,8 +810,11 @@ addEventListener('pointermove', e => {
   const pt = canvasPoint(e);
   for (const b in CARDS) if (inBox(pt, CARDS[b])) setSel(b);
 });
-addEventListener('pointerup', release);
-addEventListener('pointercancel', release);
+addEventListener('pointerup', e => {
+  if (fsArmed) { fsArmed = false; if (inBox(canvasPoint(e), grow(FS_BTN, 6))) toggleFS(); return; }
+  release();
+});
+addEventListener('pointercancel', () => { fsArmed = false; release(); });
 
 /* ----------------------------------------------------------------- update */
 const overlap = (ax, ay, aw, ah, bx, by, bw, bh) => ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
@@ -1255,6 +1280,17 @@ function drawSound() {                            // speaker icon: tap to mute
   else { rect(x + 7, y + 3, 1, 3, c); rect(x + 9, y + 2, 1, 5, c); rect(x + 11, y + 1, 1, 7, c); }
 }
 
+function drawFS() {                               // fullscreen icon: corner brackets (pointing in when already fullscreen)
+  if (!canFS) return;
+  const x = FS_BTN.x, y = FS_BTN.y, w = FS_BTN.w, hh = FS_BTN.h, c = '#e6dcff', on = isFS();
+  rect(x - 2, y - 2, w + 4, hh + 4, '#14132b');
+  for (const [cx, cy, dx, dy] of [[x, y, 1, 1], [x + w - 1, y, -1, 1], [x, y + hh - 1, 1, -1], [x + w - 1, y + hh - 1, -1, -1]]) {
+    const ox = on ? cx + dx * 4 : cx, oy = on ? cy + dy * 3 : cy, sx = on ? -dx : dx, sy = on ? -dy : dy;
+    for (let i = 0; i < 4; i++) rect(ox + sx * i, oy, 1, 1, c);
+    for (let i = 0; i < 3; i++) rect(ox, oy + sy * i, 1, 1, c);
+  }
+}
+
 function bigBlob(cx, cy, r, col) {                // chunky pixel circle
   ctx.fillStyle = col;
   cx = Math.round(cx); cy = Math.round(cy);
@@ -1316,7 +1352,7 @@ function drawSplash() {
   }
   textC(touch ? 'TAP TO JUMP. HOLD TO JUMP HIGHER. TAP AGAIN IN THE AIR TO BOOST.' : 'HOLD TO JUMP HIGHER - PRESS AGAIN IN THE AIR FOR A BOOST', 195, '#e6dcff');
   textC(touch ? 'GRAB CANS OF BEANS FOR POINTS AND EXTRA GAS.' : 'GRAB CANS OF BEANS FOR POINTS AND EXTRA GAS. M TO MUTE.', 205, '#e6dcff');
-  drawSound();
+  drawSound(); drawFS();
 }
 
 function draw() {
@@ -1500,7 +1536,7 @@ function draw() {
   }
   blit(CAN, VW - 44, 15);
   text('X' + S.beanCount, VW - 33, 17, '#ffd76a');
-  drawSound();
+  drawSound(); drawFS();
   if (S.mode === 'play' && S.banner.t > 0 && ((S.banner.t * 6) | 0) % 2) textC(S.banner.s, 40, '#dcff72', 3);
 
   if (S.mode === 'dead') {
