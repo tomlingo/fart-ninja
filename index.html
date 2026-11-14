@@ -32,8 +32,10 @@
 'use strict';
 
 /* ------------------------------------------------------------------ setup */
-const VW = 384, VH = 216;      // internal pixel resolution
+let VW = 384, VH = 216;        // view size in game pixels; fit() reshapes it to match the screen
 const GY = 184;                // ground line
+const WB = GY + 32;            // bottom of the drawn world
+let BELOW = 32;                // how much ground shows under the street (less on phones)
 const PX = 64;                 // ninja's x position on screen
 const STEP = 1 / 120;          // fixed physics step
 const ARM_REACH = 42;          // how far raised robot arms extend above the head (too tall for one jump)
@@ -41,6 +43,25 @@ const GRAV = 860, JUMP_V = -300, BOOST_V = -270;
 
 const cv = document.getElementById('game');
 const ctx = cv.getContext('2d');
+
+// Screen-space layout that depends on the view size: splash screen pieces and buttons.
+const CARDS = { city: { x: 0, y: 0, w: 98, h: 60 }, jungle: { x: 0, y: 0, w: 98, h: 60 } };
+const MENU_BTN = { x: 146, y: 141, w: 92, h: 17 };
+const PLAY_BTN = { x: 174, y: 162, w: 202, h: 18 };   // splash-screen start button (touch)
+const LAY = {};
+function layout() {
+  const compact = VH < 200, sc = compact ? 3 : 4;                 // big ninja scale
+  const colW = Math.min(204, VW - 26 * sc - (compact ? 72 : 32)), cw = Math.floor((colW - 8) / 2);
+  const left = Math.max(compact ? 48 : 8, Math.round((VW - (26 * sc + 16 + colW)) / 2)), x0 = left + 26 * sc + 16;
+  const titleH = compact ? 20 : 66, blockH = titleH + (compact ? 13 : 22) + 60 + 22;
+  const top = Math.max(6, Math.round((VH - 24 - blockH) / 2));
+  const ly = top + titleH + (compact ? 5 : 12), cy = ly + (compact ? 8 : 10);
+  Object.assign(CARDS.city, { x: x0, y: cy, w: cw });
+  Object.assign(CARDS.jungle, { x: x0 + cw + 8, y: cy, w: cw });
+  Object.assign(PLAY_BTN, { x: x0, y: cy + 64, w: cw * 2 + 8 });
+  Object.assign(LAY, { compact, sc, nx: left, ny: Math.round(top + (cy + 60 - top - 27 * sc) / 2), x0, ty: top, ly, deadY: Math.max(30, Math.round(VH * 0.2)) });
+  Object.assign(MENU_BTN, { x: Math.round((VW - 92) / 2), y: LAY.deadY + 84 });
+}
 
 function fit() {                                  // fill the screen; snap to whole device pixels so the art stays crisp
   const vv = window.visualViewport, dpr = window.devicePixelRatio || 1;
@@ -50,6 +71,16 @@ function fit() {                                  // fill the screen; snap to wh
     W -= parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
     H -= parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
   } catch (e) {}
+  // Shape the view to the screen so the game fills it. Phones get a shorter, zoomed-in view
+  // (the camera follows the ninja upward when he jumps high) but never see less than ~340px across.
+  const aspect = W / H, phone = Math.min(W, H) < 520;
+  let vh = phone ? 160 : 216, vw = Math.round(vh * aspect);
+  const minW = phone ? (aspect < 1 ? 300 : 340) : 384;
+  if (vw < minW) { vw = minW; vh = Math.max(vh, Math.min(phone ? 300 : 216, Math.round(vw / aspect))); }
+  vw = Math.min(480, vw);
+  if (vw !== VW || vh !== VH) { VW = vw; VH = vh; cv.width = VW; cv.height = VH; }
+  BELOW = phone ? 18 : 32;
+  layout();
   let s = Math.min(W / VW, H / VH);
   const snapped = Math.floor(s * dpr) / dpr;
   if (snapped > 0.85 * s) s = snapped;            // otherwise the snap would waste too much screen: scale smoothly
@@ -662,7 +693,7 @@ function makeWorld(seed) {
     near.push({ x: nx, w, h, chim: B() < 0.4, saw: B() < 0.45, palm: B() < 0.5 });
     nx += w + ((B() * 20) | 0);
   }
-  for (let i = 0; i < 26; i++) stars.push([(B() * VW) | 0, (B() * 62) | 0, B() < 0.3]);
+  for (let i = 0; i < 26; i++) stars.push([(B() * 512) | 0, (B() * 62) | 0, B() < 0.3]);
   return {
     solids: [], enemies: [], gaps: [], beans: [],
     far, farP: fx, near, nearP: nx, stars,
@@ -761,9 +792,6 @@ const scoreNow = () => distM() + S.beanCount * BEAN_PTS;
 
 let sel = 'city';                               // level chosen on the splash screen
 try { if (localStorage.getItem('fartNinjaLevel') === 'jungle') sel = 'jungle'; } catch (e) {}
-const CARDS = { city: { x: 172, y: 98, w: 98, h: 60 }, jungle: { x: 278, y: 98, w: 98, h: 60 } };
-const MENU_BTN = { x: 146, y: 141, w: 92, h: 17 };
-const PLAY_BTN = { x: 174, y: 162, w: 202, h: 18 };   // splash-screen start button (touch)
 const SND_BTN = { x: 5, y: 23, w: 15, h: 11 };   // sound on/off, top-left (out of the way of thumbs)
 const FS_BTN = { x: 30, y: 23, w: 13, h: 11 };   // fullscreen toggle, next to it
 const fsRoot = document.documentElement;
@@ -924,7 +952,7 @@ function update(dt) {
   if (S.mode === 'splash') {
     if ((S.spT -= dt) <= 0) {
       S.spT = 0.06;
-      S.sp.push({ x: 80 + rand(-8, 8), y: 128 + Math.sin(S.t * 2.2) * 4, vx: rand(-16, 16), vy: rand(16, 44), r: 3, life: 0, max: rand(1.6, 2.4) });
+      S.sp.push({ x: LAY.nx + 13 * LAY.sc + rand(-8, 8), y: LAY.ny + 23.5 * LAY.sc + Math.sin(S.t * 2.2) * 4, vx: rand(-16, 16), vy: rand(16, 44), r: 3, life: 0, max: rand(1.6, 2.4) });
     }
     for (const q of S.sp) { q.life += dt; q.x += q.vx * dt; q.y += q.vy * dt; q.vy *= 1 - 0.9 * dt; q.vx += rand(-20, 20) * dt; q.r += 7 * dt; }
     S.sp = S.sp.filter(q => q.life < q.max);
@@ -997,7 +1025,7 @@ function update(dt) {
   }
 
   for (const e of S.enemies) {
-    if (e.x > p.x + VW) break;
+    if (e.x > p.x + 384) break;
     if (e.x < p.x - 120) continue;
     if (e.k === 'dog') {
       if (!e.run && e.x - p.x < 230) e.run = true;
@@ -1016,7 +1044,7 @@ function update(dt) {
       if (!J || ((S.t * 2 + e.home) | 0) % 3) e.x += e.dir * 22 * dt;     // jungle robots seize up now and then
       if (e.x < e.home - e.range) e.dir = 1;
       if (e.x > e.home + e.range) e.dir = -1;
-      if (J && Math.random() < dt * 1.6 && e.x - p.x < VW) S.parts.push({ x: e.x + 8, y: e.y + 2, vx: rand(-10, 10) + 30, vy: -14, life: 0, max: rand(0.5, 0.9), s: 2, g: 1, c: '#555a54' });   // smoke
+      if (J && Math.random() < dt * 1.6 && e.x - p.x < 384) S.parts.push({ x: e.x + 8, y: e.y + 2, vx: rand(-10, 10) + 30, vy: -14, life: 0, max: rand(0.5, 0.9), s: 2, g: 1, c: '#555a54' });   // smoke
       if (e.arms && J) {                        // rusty arms stretch out along the ground toward the ninja
         if (!e.reach) e.reach = Math.round(speedAt(e.x) * 0.55);          // too long for a single jump
         const near = e.x - p.x < e.reach + v * 1.3 && e.x - p.x > -30;
@@ -1150,7 +1178,7 @@ function drawPalm(cx, h, lean, sc, tc, fc, hc) {          // curved trunk, droop
 function drawJungleBack(bgScroll, gs) {
   const bh = Math.ceil(GY / JSKY.length);
   JSKY.forEach((c, i) => rect(0, i * bh, VW, bh, c));
-  const sx = 344, sy = 46, sr = 14;                       // hazy sun
+  const sx = VW - 40, sy = 64, sr = 14;                       // hazy sun
   for (let dy = -sr; dy <= sr; dy++) {
     const hw = Math.floor(Math.sqrt(sr * sr - dy * dy));
     rect(sx - hw, sy + dy, hw * 2, 1, '#fff8d2');
@@ -1196,7 +1224,7 @@ function drawJungleBack(bgScroll, gs) {
     }
   }
   // ground: earth with a grassy top
-  rect(0, GY, VW, VH - GY, '#3b2a1e');
+  rect(0, GY, VW, WB - GY, '#3b2a1e');
   rect(0, GY, VW, 2, '#6cc24a');
   rect(0, GY + 2, VW, 2, '#3f8a3a');
   for (let wx = Math.floor(gs / 32) * 32; wx < gs + VW; wx += 32) {
@@ -1210,22 +1238,22 @@ function drawJungleBack(bgScroll, gs) {
 function drawJungleGap(g, x) {
   const w = g.w, t = S.t, gx = g.x | 0;
   if (g.kind === 'fall') {                                // a river pouring over the edge
-    rect(x, GY, w, VH - GY, '#2a86c4');
+    rect(x, GY, w, WB - GY, '#2a86c4');
     for (let i = 1; i < w - 1; i += 3) {
       const ph = (i * 7 + gx) % 11, yy = (t * 70 + ph * 9) % 16;
-      for (let y0 = GY - 16 + yy; y0 < VH; y0 += 16) {
-        const a = Math.max(GY, y0), b = Math.min(VH, y0 + 6);
+      for (let y0 = GY - 16 + yy; y0 < WB; y0 += 16) {
+        const a = Math.max(GY, y0), b = Math.min(WB, y0 + 6);
         if (b > a) rect(x + i, a, 1, b - a, ph % 3 ? '#6cc4ee' : '#d9f6ff');
       }
     }
     for (let i = 0; i < w; i += 4) rect(x + i + ((((t * 8) | 0) + i) % 2), GY, 3, 2, '#ffffff');
-    ctx.globalAlpha = 0.55; rect(x, VH - 6, w, 6, '#d9f6ff'); ctx.globalAlpha = 1;
+    ctx.globalAlpha = 0.55; rect(x, WB - 6, w, 6, '#d9f6ff'); ctx.globalAlpha = 1;
   } else {                                                // a sheer cliff
-    rect(x, GY, w, VH - GY, '#120e0a');
+    rect(x, GY, w, WB - GY, '#120e0a');
     rect(x, GY, w, 6, '#2a2018'); rect(x, GY + 6, w, 6, '#1c1510');
-    ctx.globalAlpha = 0.22; rect(x, VH - 9, w, 9, '#cfe8d8'); ctx.globalAlpha = 1;
+    ctx.globalAlpha = 0.22; rect(x, WB - 9, w, 9, '#cfe8d8'); ctx.globalAlpha = 1;
   }
-  for (let j = 0; j < VH - GY; j += 4) {                  // rocky walls
+  for (let j = 0; j < WB - GY; j += 4) {                  // rocky walls
     const k = ((j * 5 + gx) % 7) % 3;
     rect(x - 1, GY + j, 2 + k, 4, '#6a5a48');
     rect(x + w - 1 - k, GY + j, 2 + k, 4, '#4a3d30');
@@ -1375,13 +1403,14 @@ function drawCard(b, selected) {
   for (let i = 0; i < 4; i++) rect(px, py + i * 8, pw, 8, bands[1 + i * 2 + (i === 3 ? 2 : 0)]);
   if (jungle) {
     for (const t of [[6, 24], [26, 17], [50, 27], [74, 20]]) {
+      if (t[0] + 13 > pw) continue;
       rect(px + t[0] + 5, gy - t[1] + 6, 3, t[1] - 6, '#2b5a44');
       rect(px + t[0], gy - t[1], 13, 8, '#2f7a55'); rect(px + t[0] + 2, gy - t[1] - 2, 9, 3, '#2f7a55');
     }
     rect(px, gy, pw, 8, '#3b2a1e'); rect(px, gy, pw, 2, '#6cc24a');
     blit(TIGER[0], px + 14, gy - 11); blit(MOSSBOT[0], px + 60, gy - 20);
   } else {
-    for (const t of [[0, 14, 16], [18, 22, 12], [34, 10, 20], [58, 18, 14], [76, 12, 16]]) rect(px + t[0], gy - t[1], t[2], t[1], '#4d3168');
+    for (const t of [[0, 14, 16], [18, 22, 12], [34, 10, 20], [58, 18, 14], [76, 12, 16]]) if (t[0] < pw) rect(px + t[0], gy - t[1], Math.min(t[2], pw - t[0]), t[1], '#4d3168');
     rect(px, gy, pw, 8, '#29233f'); rect(px, gy, pw, 1, '#7669a0');
     blit(DOG[0], px + 14, gy - 11); blit(BOT[0], px + 60, gy - 20);
   }
@@ -1401,15 +1430,18 @@ function drawSplash() {
   }
   ctx.globalAlpha = 1;
   // the ninja, hanging in the air and staring straight out
-  const bob = Math.round(Math.sin(S.t * 2.2) * 4), nx = 28, ny = 34 + bob;
+  const L = LAY, sc = L.sc, bob = Math.round(Math.sin(S.t * 2.2) * sc), nx = L.nx, ny = L.ny + bob;
   const fr = ((S.t * 0.8) % 3) > 2.85 ? 2 : ((S.t * 6) | 0) % 2;
-  for (const o of [[-2, 0], [2, 0], [0, -2], [0, 2]]) blitBig(BIG[fr], nx + o[0], ny + o[1], 4, '#f4f0dc');
-  blitBig(BIG[fr], nx, ny, 4);
+  for (const o of [[-2, 0], [2, 0], [0, -2], [0, 2]]) blitBig(BIG[fr], nx + o[0], ny + o[1], sc, '#f4f0dc');
+  blitBig(BIG[fr], nx, ny, sc);
   // title
-  text('FART', 177, 13, '#14132b', 6); text('FART', 174, 10, '#dcff72', 6);
-  text('NINJA', 177, 49, '#14132b', 6); text('NINJA', 174, 46, '#dcff72', 6);
-  text('BEST ' + best, 300, 12, '#e6dcff');
-  text('SELECT YOUR LEVEL', 174, 88, '#ffffff');
+  if (L.compact) { text('FART NINJA', L.x0 + 2, L.ty + 2, '#14132b', 4); text('FART NINJA', L.x0, L.ty, '#dcff72', 4); }
+  else {
+    text('FART', L.x0 + 3, L.ty + 3, '#14132b', 6); text('FART', L.x0, L.ty, '#dcff72', 6);
+    text('NINJA', L.x0 + 3, L.ty + 39, '#14132b', 6); text('NINJA', L.x0, L.ty + 36, '#dcff72', 6);
+  }
+  text('BEST ' + best, 5, 8, '#e6dcff');
+  text('SELECT YOUR LEVEL', L.x0, L.ly, '#ffffff');
   drawCard('city', sel === 'city');
   drawCard('jungle', sel === 'jungle');
   if (touch) {
@@ -1419,14 +1451,15 @@ function drawSplash() {
     text(label, b.x + Math.round((b.w - textW(label, 2)) / 2), b.y + 4, '#14132b', 2);
   }
   else {
-    if (((S.t * 2) | 0) % 2) text('LEFT OR RIGHT TO CHOOSE - SPACE TO START', 174, 164, '#ffd76a');
-    text('OR TAP A LEVEL', 174, 173, '#e6dcff');
+    if (((S.t * 2) | 0) % 2) text('LEFT OR RIGHT TO CHOOSE - SPACE TO START', L.x0, PLAY_BTN.y + 2, '#ffd76a');
+    text('OR CLICK A LEVEL', L.x0, PLAY_BTN.y + 11, '#e6dcff');
   }
-  textC(touch ? 'TAP A LEVEL TO PREVIEW IT. IN GAME: TAP TO JUMP, HOLD FOR HIGHER.' : 'HOLD TO JUMP HIGHER - PRESS AGAIN IN THE AIR FOR A BOOST', 195, '#e6dcff');
-  textC(touch ? 'TAP AGAIN IN THE AIR TO BOOST. GRAB BEANS FOR POINTS AND GAS.' : 'GRAB CANS OF BEANS FOR POINTS AND EXTRA GAS. M TO MUTE.', 205, '#e6dcff');
+  textC(touch ? 'TAP A LEVEL TO PREVIEW IT. IN GAME: TAP TO JUMP, HOLD FOR HIGHER.' : 'HOLD TO JUMP HIGHER - PRESS AGAIN IN THE AIR FOR A BOOST', VH - 21, '#e6dcff');
+  textC(touch ? 'TAP AGAIN IN THE AIR TO BOOST. GRAB BEANS FOR POINTS AND GAS.' : 'GRAB CANS OF BEANS FOR POINTS AND EXTRA GAS. M TO MUTE.', VH - 11, '#e6dcff');
   drawSound(); drawFS();
 }
 
+let camY = 0;                                     // top of the view in world pixels
 function draw() {
   const p = S.p;
   let cam = Math.floor(p.x - PX);
@@ -1434,6 +1467,13 @@ function draw() {
   const bgScroll = S.mode === 'splash' ? cam + S.t * 40 : cam;
 
   const J = S.biome === 'jungle';
+  const baseCam = GY + BELOW - VH;                 // normally the view rests on the ground...
+  const wantY = S.mode === 'play' && !p.pit ? Math.min(baseCam, p.y - 50) : S.mode === 'dead' ? camY : baseCam;   // ...and rises with a high jump
+  camY = S.mode === 'splash' || Math.abs(wantY - camY) > 160 ? wantY : camY + (wantY - camY) * 0.18;
+  const cy = Math.round(camY);
+  ctx.save();
+  ctx.translate(0, -cy);
+  if (cy < 0) rect(0, cy, VW, -cy, J ? JSKY[0] : SKY[0]);
   if (J) drawJungleBack(bgScroll, S.mode === 'splash' ? bgScroll : cam);
   else {
   // sky
@@ -1441,7 +1481,7 @@ function draw() {
   SKY.forEach((c, i) => rect(0, i * bh, VW, bh, c));
   for (const st of S.stars) rect(st[0], st[1], 1, 1, st[2] && ((S.t * 2 + st[0]) | 0) % 2 ? '#8f7fc4' : '#e6dcff');
   // sun
-  const sx = 286, sy = 150, sr = 27;
+  const sx = VW - 98, sy = 150, sr = 27;
   for (let dy = -sr; dy <= sr; dy++) {
     if (dy > 2 && (dy % 5 === 0 || (dy > 14 && dy % 5 === 1))) continue;
     const hw = Math.floor(Math.sqrt(sr * sr - dy * dy));
@@ -1469,7 +1509,7 @@ function draw() {
   }
 
   // ground
-  rect(0, GY, VW, VH - GY, '#29233f');
+  rect(0, GY, VW, WB - GY, '#29233f');
   rect(0, GY, VW, 1, '#7669a0');
   rect(0, GY + 1, VW, 2, '#3b3357');
   const gs = S.mode === 'splash' ? bgScroll : cam;
@@ -1479,7 +1519,7 @@ function draw() {
   }
   }
 
-  if (S.mode === 'splash') { drawSplash(); return; }
+  if (S.mode === 'splash') { ctx.restore(); drawSplash(); return; }
 
   // drop-offs
   for (const g of S.gaps) {
@@ -1487,9 +1527,9 @@ function draw() {
     if (x > VW) break;
     if (x + g.w < 0) continue;
     if (J) { drawJungleGap(g, x); continue; }
-    rect(x, GY, g.w, VH - GY, '#0b0916');
+    rect(x, GY, g.w, WB - GY, '#0b0916');
     rect(x, GY, g.w, 5, '#1b1631'); rect(x, GY + 5, g.w, 5, '#130f24');
-    rect(x, GY, 2, VH - GY, '#3b3357'); rect(x + g.w - 2, GY, 2, VH - GY, '#221c38');
+    rect(x, GY, 2, WB - GY, '#3b3357'); rect(x + g.w - 2, GY, 2, WB - GY, '#221c38');
     for (let i = 0; i < 8; i += 2) {             // hazard-striped lips
       rect(x - 8 + i, GY, 2, 3, i % 4 ? '#2a2a33' : '#e8b93a');
       rect(x + g.w + i, GY, 2, 3, i % 4 ? '#2a2a33' : '#e8b93a');
@@ -1594,6 +1634,7 @@ function draw() {
   }
 
   for (const o of S.pops) text(o.s, Math.round(o.x - cam), Math.round(o.y - o.t * 24), '#ffd76a');
+  ctx.restore();
 
   // HUD
   const dist = distM(), score = scoreNow();
@@ -1612,11 +1653,12 @@ function draw() {
   if (S.mode === 'play' && S.banner.t > 0 && ((S.banner.t * 6) | 0) % 2) textC(S.banner.s, 40, '#dcff72', 3);
 
   if (S.mode === 'dead') {
-    textC('BUSTED!', 48, '#ff6b5e', 5);
-    textC(S.why, 84, '#ffffff');
-    textC('SCORE ' + score + ' - ' + dist + 'M - ' + S.beanCount + ' BEANS', 96, '#e6dcff');
-    if (S.newBest) textC('NEW BEST!', 108, '#dcff72', 2);
-    if (S.lock <= 0 && ((S.t * 2) | 0) % 2) textC(touch ? 'TAP TO RUN AGAIN' : 'PRESS SPACE OR TAP TO RUN AGAIN', touch ? 125 : 126, '#ffd76a', touch ? 2 : 1);
+    const y0 = LAY.deadY;
+    textC('BUSTED!', y0, '#ff6b5e', 5);
+    textC(S.why, y0 + 33, '#ffffff');
+    textC('SCORE ' + score + ' - ' + dist + 'M - ' + S.beanCount + ' BEANS', y0 + 43, '#e6dcff');
+    if (S.newBest) textC('NEW BEST!', y0 + 53, '#dcff72', 2);
+    if (S.lock <= 0 && ((S.t * 2) | 0) % 2) textC(touch ? 'TAP TO RUN AGAIN' : 'PRESS SPACE OR TAP TO RUN AGAIN', y0 + (touch ? 68 : 70), '#ffd76a', touch ? 2 : 1);
     rect(MENU_BTN.x, MENU_BTN.y, MENU_BTN.w, MENU_BTN.h, '#14132b');
     rect(MENU_BTN.x + 1, MENU_BTN.y + 1, MENU_BTN.w - 2, MENU_BTN.h - 2, '#4b2f6c');
     textC(touch ? 'CHANGE LEVEL' : 'ESC - CHANGE LEVEL', MENU_BTN.y + 6, '#e6dcff', 1, null);
@@ -1636,7 +1678,7 @@ function frame(ts) {
 }
 requestAnimationFrame(frame);
 
-window.__fartNinja = { get S() { return S; }, update, draw, press, release, newLevel, STEP, speedAt, distM, scoreNow, setTouch: v => { touch = v; }, musicStep, jungleStep, menuStep, musicTick, setSel, startRun, toSplash, get mus() { return mus; }, get ac() { return ac; } };
+window.__fartNinja = { get S() { return S; }, update, draw, press, release, newLevel, STEP, speedAt, distM, scoreNow, view: () => [VW, VH, BELOW], setTouch: v => { touch = v; }, musicStep, jungleStep, menuStep, musicTick, setSel, startRun, toSplash, get mus() { return mus; }, get ac() { return ac; } };
 })();
 </script>
 </body>
