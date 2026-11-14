@@ -74,6 +74,12 @@ function spr(rows) {
   });
   return { runs, w, h: rows.length };
 }
+function blitBig(s, x, y, sc, col) {             // scaled-up sprite; col draws it as a flat silhouette
+  for (const r of s.runs) {
+    ctx.fillStyle = col || r[3];
+    ctx.fillRect(x + r[0] * sc, y + r[1] * sc, r[2] * sc, sc);
+  }
+}
 function blit(s, x, y, flipV) {
   x = Math.round(x); y = Math.round(y);
   for (const r of s.runs) {
@@ -103,6 +109,42 @@ const NINJA_LEGS = [
 ];
 const NINJA = NINJA_LEGS.map(l => spr(NINJA_BODY.concat(l)));
 const RUN_CYCLE = [0, 1, 2, 1];
+
+const BIG_ROWS = [                      // splash screen: mid-jump, facing the camera
+  '..........kkkkkk..........',
+  '.........kkkkkkkk.........',
+  '........kkkkkkkkkk........',
+  '........kkkkkkkkkk........',
+  '.......rrrrrrrrrrrr....rr.',
+  '.......rrrrrrrrrrrrrrrrr..',
+  '........ssssssssss...rr...',
+  '........swKwsswKws........',
+  '........ssssssssss........',
+  '........kkkkkkkkkk........',
+  '.........kkkkkkkk.........',
+  '..kk.....nkkkkkkn.....kk..',
+  '..ssk...nkkkkkkkkn...kss..',
+  '...kkk.nkkkkkkkkkkn.kkk...',
+  '....kkkkkkkkkkkkkkkkkk....',
+  '.....kkkkkkkkkkkkkkkk.....',
+  '........kkkkkkkkkk........',
+  '........krrrrrrrrk........',
+  '........kkkkkkkkkk........',
+  '.......kkkkkkkkkkkk.......',
+  '......kkkkk....kkkkk......',
+  '.....kkkkk......kkkkk.....',
+  '....kkkk..........kkkk....',
+  '....kkk............kkk....',
+  '....kkkk..........kkkk....',
+  '.....kkkk........kkkk.....',
+  '......kkk........kkk......'
+];
+const bigWith = edits => spr(BIG_ROWS.map((r, i) => edits[i] || r));
+const BIG = [
+  spr(BIG_ROWS),
+  bigWith({ 4: '.......rrrrrrrrrrrr.......', 5: '.......rrrrrrrrrrrrrrr.rr.', 6: '........ssssssssss..rrrr..' }),   // headband tail flutters
+  bigWith({ 7: '........sKKKssKKKs........' })                                                                       // blink
+];
 
 const DOG_BODY = [
   '..e.e.............',
@@ -458,19 +500,42 @@ function jungleStep(i, t) {
     for (let k = 0; k < 3; k++) mDrum(bt + k * 0.09, 2600 + k * 250, 3500 + k * 250, 0.06, 0.02);
   }
 }
+// Splash screen: the same scale, slowed right down - sparse koto plucks over a drone and a distant drum.
+const M_STEP_T = 60 / 84 / 4;
+const M_NOTES = [
+  [57, _, _, _, 64, _, _, 65, _, _, 64, _, 60, _, _, _],
+  [59, _, _, _, 60, _, _, 64, _, _, _, _, 57, _, _, _],
+  [57, _, _, _, 64, _, _, 65, _, _, 69, _, _, 65, 64, _],
+  [60, _, _, 59, _, _, 57, _, _, _, _, _, _, _, _, _]
+];
+function menuStep(i, t) {
+  const bar = (i >> 4) % 4, s = i & 15, m = M_NOTES[bar][s];
+  if (m) { mNote('triangle', hz(m + 12), t, 0.7, 0.05, true); mNote('sine', hz(m + 24), t, 0.25, 0.012, true); }
+  if (s === 0) {
+    mNote('sine', hz(bar === 1 ? 43 : 45), t, M_STEP_T * 15, 0.07, false);
+    mNote('sine', hz(bar === 1 ? 55 : 57), t, M_STEP_T * 15, 0.03, false);
+    mTaiko(t, 0.15);
+  }
+  if (s === 10 && bar % 2) mTaiko(t, 0.07);
+}
+const SONGS = {
+  m: { stepT: M_STEP_T, len: 64, step: menuStep },
+  c: { stepT: STEP_T, len: ORDER.length * 16, step: musicStep },
+  j: { stepT: J_STEP_T, len: J_ORDER.length * 16, step: jungleStep }
+};
 function musicTick() {
   if (!ac || ac.state !== 'running') return;
   if (!mus) musicInit();
-  const jungle = S && S.biome === 'jungle', stepT = jungle ? J_STEP_T : STEP_T;
-  if (mus.song !== (jungle ? 'j' : 'c')) {                            // level changed: start its theme from the top
-    mus.song = jungle ? 'j' : 'c'; mus.step = 0;
-    mus.delay.delayTime.value = stepT * 3;
+  const key = S.mode === 'splash' ? 'm' : S.biome === 'jungle' ? 'j' : 'c', song = SONGS[key];
+  if (mus.song !== key) {                                             // screen or level changed: start its theme from the top
+    mus.song = key; mus.step = 0;
+    mus.delay.delayTime.value = song.stepT * 3;
   }
   if (mus.next < ac.currentTime) mus.next = ac.currentTime + 0.06;   // tab was in the background
   while (mus.next < ac.currentTime + 0.2) {
-    if (!muted) { if (jungle) jungleStep(mus.step, mus.next); else musicStep(mus.step, mus.next); }
-    mus.step = (mus.step + 1) % ((jungle ? J_ORDER.length : ORDER.length) * 16);
-    mus.next += stepT;
+    if (!muted) song.step(mus.step, mus.next);
+    mus.step = (mus.step + 1) % song.len;
+    mus.next += song.stepT;
   }
 }
 
@@ -594,13 +659,19 @@ try { best = +localStorage.getItem('fartNinjaBestScore') || 0; } catch (e) {}
 const distM = () => Math.max(0, Math.floor((S.p.x - 120) / 10));
 const scoreNow = () => distM() + S.beanCount * BEAN_PTS;
 
+let sel = 'city';                               // level chosen on the splash screen
+try { if (localStorage.getItem('fartNinjaLevel') === 'jungle') sel = 'jungle'; } catch (e) {}
+const CARDS = { city: { x: 172, y: 98, w: 98, h: 60 }, jungle: { x: 278, y: 98, w: 98, h: 60 } };
+const MENU_BTN = { x: 146, y: 140, w: 92, h: 13 };
+
 function newLevel(seed, biome) {
   if (seed === undefined) seed = (Math.random() * 0x10000) | 0;
   S = Object.assign(makeWorld(seed), {
     seed,
-    biome: biome || (Math.random() < 0.5 ? 'city' : 'jungle'),   // which of the two levels this run is
+    biome: biome || sel,                        // which of the two levels this run is
     code: seed.toString(16).toUpperCase().padStart(4, '0'),
-    mode: 'title',
+    mode: 'splash',
+    sp: [], spT: 0,                             // splash-screen fart clouds
     t: 0, time: 0, lock: 0, shake: 0, why: '',
     beanCount: 0, mile: 0, banner: { s: '', t: 0 }, newBest: false, tidy: 0,
     parts: [], pops: [],
@@ -626,22 +697,55 @@ function dust(x, y) {
 }
 
 /* ------------------------------------------------------------------ input */
+function setSel(b) {
+  if (sel === b) return;
+  sel = b; S.biome = b;
+  try { localStorage.setItem('fartNinjaLevel', b); } catch (e) {}
+  sfxTone([660], 0.04, 'square', 0.05);
+}
+function startRun() { newLevel(undefined, sel); S.mode = 'play'; }
+function toSplash() { sel = S.biome; newLevel(undefined, sel); }
 function press() {
   audioInit();
-  if (S.mode === 'title') { S.mode = 'play'; }
+  if (S.mode === 'splash') startRun();
   else if (S.mode === 'play') { S.p.buf = 0.12; }
-  else if (S.lock <= 0) { newLevel(); S.mode = 'play'; }
+  else if (S.lock <= 0) startRun();
 }
 function release() {
   if (S.mode === 'play' && S.p.vy < -110) S.p.vy = -110;   // short tap = short hop
 }
 const JUMP_KEYS = ['Space', 'ArrowUp', 'KeyW', 'KeyX', 'Enter'];
+const PICK_KEYS = ['ArrowLeft', 'ArrowRight', 'KeyA', 'KeyD'];
 addEventListener('keydown', e => {
-  if (JUMP_KEYS.includes(e.code)) { e.preventDefault(); if (!e.repeat) press(); }
+  if (S.mode === 'splash' && PICK_KEYS.includes(e.code)) {
+    e.preventDefault(); audioInit();
+    setSel(e.code === 'ArrowLeft' || e.code === 'KeyA' ? 'city' : 'jungle');
+  }
+  else if (JUMP_KEYS.includes(e.code)) { e.preventDefault(); if (!e.repeat) press(); }
   else if (e.code === 'KeyM') muted = !muted;
+  else if ((e.code === 'Escape' || e.code === 'Backspace') && S.mode !== 'splash') { e.preventDefault(); toSplash(); }
 });
 addEventListener('keyup', e => { if (JUMP_KEYS.includes(e.code)) release(); });
-addEventListener('pointerdown', e => { e.preventDefault(); press(); });
+const inBox = (pt, b) => pt.x >= b.x && pt.x < b.x + b.w && pt.y >= b.y && pt.y < b.y + b.h;
+function canvasPoint(e) {
+  const r = cv.getBoundingClientRect();
+  return { x: (e.clientX - r.left) / r.width * VW, y: (e.clientY - r.top) / r.height * VH };
+}
+addEventListener('pointerdown', e => {
+  e.preventDefault();
+  const pt = canvasPoint(e);
+  if (S.mode === 'splash') {                    // tap a level card to play it; anywhere else just wakes the audio
+    audioInit();
+    for (const b in CARDS) if (inBox(pt, CARDS[b])) { setSel(b); startRun(); }
+  }
+  else if (S.mode === 'dead' && inBox(pt, MENU_BTN)) toSplash();
+  else press();
+});
+addEventListener('pointermove', e => {
+  if (S.mode !== 'splash') return;
+  const pt = canvasPoint(e);
+  for (const b in CARDS) if (inBox(pt, CARDS[b])) setSel(b);
+});
 addEventListener('pointerup', release);
 addEventListener('pointercancel', release);
 
@@ -682,7 +786,15 @@ function update(dt) {
   for (const o of S.pops) o.t += dt;
   if (S.pops.length && S.pops[0].t > 0.7) S.pops.shift();
 
-  if (S.mode === 'title') { p.run += dt * 9; return; }
+  if (S.mode === 'splash') {
+    if ((S.spT -= dt) <= 0) {
+      S.spT = 0.06;
+      S.sp.push({ x: 80 + rand(-8, 8), y: 128 + Math.sin(S.t * 2.2) * 4, vx: rand(-16, 16), vy: rand(16, 44), r: 3, life: 0, max: rand(1.6, 2.4) });
+    }
+    for (const q of S.sp) { q.life += dt; q.x += q.vx * dt; q.y += q.vy * dt; q.vy *= 1 - 0.9 * dt; q.vx += rand(-20, 20) * dt; q.r += 7 * dt; }
+    S.sp = S.sp.filter(q => q.life < q.max);
+    return;
+  }
   if (S.mode === 'dead') { p.vy += GRAV * dt; p.y += p.vy * dt; return; }
   /* ---- play ---- */
   S.time += dt;
@@ -1092,14 +1204,75 @@ function drawOldMan(e, x) {
   }
 }
 
+function bigBlob(cx, cy, r, col) {                // chunky pixel circle
+  ctx.fillStyle = col;
+  cx = Math.round(cx); cy = Math.round(cy);
+  for (let dy = -r; dy < r; dy += 2) {
+    const hw = Math.floor(Math.sqrt(Math.max(0, r * r - (dy + 1) * (dy + 1))) / 2) * 2;
+    if (hw > 0) ctx.fillRect(cx - hw, cy + Math.floor(dy), hw * 2, 2);
+  }
+}
+
+function drawCard(b, selected) {
+  const c = CARDS[b], jungle = b === 'jungle', x = c.x, y = c.y;
+  rect(x, y, c.w, c.h, selected ? '#dcff72' : '#14132b');
+  rect(x + 2, y + 2, c.w - 4, c.h - 4, '#14132b');
+  const px = x + 3, py = y + 3, pw = c.w - 6, bands = jungle ? JSKY : SKY, gy = py + 32;
+  for (let i = 0; i < 4; i++) rect(px, py + i * 8, pw, 8, bands[1 + i * 2 + (i === 3 ? 2 : 0)]);
+  if (jungle) {
+    for (const t of [[6, 24], [26, 17], [50, 27], [74, 20]]) {
+      rect(px + t[0] + 5, gy - t[1] + 6, 3, t[1] - 6, '#2b5a44');
+      rect(px + t[0], gy - t[1], 13, 8, '#2f7a55'); rect(px + t[0] + 2, gy - t[1] - 2, 9, 3, '#2f7a55');
+    }
+    rect(px, gy, pw, 8, '#3b2a1e'); rect(px, gy, pw, 2, '#6cc24a');
+    blit(TIGER[0], px + 14, gy - 11); blit(MOSSBOT[0], px + 60, gy - 20);
+  } else {
+    for (const t of [[0, 14, 16], [18, 22, 12], [34, 10, 20], [58, 18, 14], [76, 12, 16]]) rect(px + t[0], gy - t[1], t[2], t[1], '#4d3168');
+    rect(px, gy, pw, 8, '#29233f'); rect(px, gy, pw, 1, '#7669a0');
+    blit(DOG[0], px + 14, gy - 11); blit(BOT[0], px + 60, gy - 20);
+  }
+  const label = jungle ? 'JUNGLE' : 'WAREHOUSE DISTRICT';
+  text(label, x + Math.round((c.w - textW(label)) / 2), y + 47, selected ? '#dcff72' : '#a99ad6');
+  if (!selected) { ctx.globalAlpha = 0.45; rect(x, y, c.w, c.h, '#0d0b1a'); ctx.globalAlpha = 1; }
+  else if (((S.t * 3) | 0) % 2) { rect(x + 5, y + 48, 3, 3, '#dcff72'); rect(x + c.w - 8, y + 48, 3, 3, '#dcff72'); }
+}
+
+function drawSplash() {
+  ctx.globalAlpha = 0.5; rect(0, 0, VW, VH, '#0d0b1a'); ctx.globalAlpha = 1;
+  // green cloud billowing out below the ninja
+  for (const q of S.sp) {
+    const a = q.life / q.max;
+    ctx.globalAlpha = a > 0.5 ? Math.max(0, 1 - (a - 0.5) / 0.5) : 1;
+    bigBlob(q.x, q.y, q.r, GREENS[Math.min(3, (a * 4) | 0)]);
+  }
+  ctx.globalAlpha = 1;
+  // the ninja, hanging in the air and staring straight out
+  const bob = Math.round(Math.sin(S.t * 2.2) * 4), nx = 28, ny = 34 + bob;
+  const fr = ((S.t * 0.8) % 3) > 2.85 ? 2 : ((S.t * 6) | 0) % 2;
+  for (const o of [[-2, 0], [2, 0], [0, -2], [0, 2]]) blitBig(BIG[fr], nx + o[0], ny + o[1], 4, '#f4f0dc');
+  blitBig(BIG[fr], nx, ny, 4);
+  // title
+  text('FART', 177, 13, '#14132b', 6); text('FART', 174, 10, '#dcff72', 6);
+  text('NINJA', 177, 49, '#14132b', 6); text('NINJA', 174, 46, '#dcff72', 6);
+  text('BEST ' + best, 300, 12, '#e6dcff');
+  text('SELECT YOUR LEVEL', 174, 88, '#ffffff');
+  drawCard('city', sel === 'city');
+  drawCard('jungle', sel === 'jungle');
+  if (((S.t * 2) | 0) % 2) text('LEFT OR RIGHT TO CHOOSE - SPACE TO START', 174, 164, '#ffd76a');
+  text('OR TAP A LEVEL', 174, 173, '#e6dcff');
+  textC('HOLD TO JUMP HIGHER - PRESS AGAIN IN THE AIR FOR A BOOST', 195, '#e6dcff');
+  textC('GRAB CANS OF BEANS FOR POINTS AND EXTRA GAS. M TO MUTE.', 205, '#e6dcff');
+  if (muted) text('MUTED', 300, 20, '#a99ad6');
+}
+
 function draw() {
   const p = S.p;
   let cam = Math.floor(p.x - PX);
   if (S.shake > 0) cam += Math.round(rand(-2, 2));
-  const bgScroll = S.mode === 'title' ? cam + S.t * 110 : cam;
+  const bgScroll = S.mode === 'splash' ? cam + S.t * 40 : cam;
 
   const J = S.biome === 'jungle';
-  if (J) drawJungleBack(bgScroll, S.mode === 'title' ? bgScroll : cam);
+  if (J) drawJungleBack(bgScroll, S.mode === 'splash' ? bgScroll : cam);
   else {
   // sky
   const bh = Math.ceil(GY / SKY.length);
@@ -1137,12 +1310,14 @@ function draw() {
   rect(0, GY, VW, VH - GY, '#29233f');
   rect(0, GY, VW, 1, '#7669a0');
   rect(0, GY + 1, VW, 2, '#3b3357');
-  const gs = S.mode === 'title' ? bgScroll : cam;
+  const gs = S.mode === 'splash' ? bgScroll : cam;
   for (let wx = Math.floor(gs / 32) * 32; wx < gs + VW; wx += 32) {
     rect(Math.floor(wx - gs), GY + 15, 14, 2, '#453c66');
     rect(Math.floor(wx - gs) + 21, GY + 6 + ((wx / 32) & 3) * 5, 3, 1, '#352e50');
   }
   }
+
+  if (S.mode === 'splash') { drawSplash(); return; }
 
   // drop-offs
   for (const g of S.gaps) {
@@ -1274,18 +1449,15 @@ function draw() {
   if (muted) text('MUTED', VW - 44, 28, '#a99ad6');
   if (S.mode === 'play' && S.banner.t > 0 && ((S.banner.t * 6) | 0) % 2) textC(S.banner.s, 40, '#dcff72', 3);
 
-  if (S.mode === 'title') {
-    textC('FART NINJA', 44, '#dcff72', 5);
-    textC(J ? 'ONE ENDLESS OVERGROWN JUNGLE. ONE GASSY NINJA.' : 'ONE ENDLESS WAREHOUSE DISTRICT. ONE GASSY NINJA.', 82, '#ffffff');
-    if (((S.t * 2) | 0) % 2) textC('PRESS SPACE OR TAP TO START', 104, '#ffd76a');
-    textC('HOLD TO JUMP HIGHER - PRESS AGAIN IN THE AIR FOR A BOOST', 120, '#e6dcff');
-    textC('GRAB CANS OF BEANS FOR POINTS AND EXTRA GAS. IT GETS FASTER.', 130, '#e6dcff');
-  } else if (S.mode === 'dead') {
+  if (S.mode === 'dead') {
     textC('BUSTED!', 48, '#ff6b5e', 5);
     textC(S.why, 84, '#ffffff');
     textC('SCORE ' + score + ' - ' + dist + 'M - ' + S.beanCount + ' BEANS', 96, '#e6dcff');
     if (S.newBest) textC('NEW BEST!', 108, '#dcff72', 2);
-    if (S.lock <= 0 && ((S.t * 2) | 0) % 2) textC('PRESS SPACE OR TAP TO RUN AGAIN', 126, '#ffd76a');
+    if (S.lock <= 0 && ((S.t * 2) | 0) % 2) textC('PRESS SPACE OR TAP TO RUN AGAIN', 124, '#ffd76a');
+    rect(MENU_BTN.x, MENU_BTN.y, MENU_BTN.w, MENU_BTN.h, '#14132b');
+    rect(MENU_BTN.x + 1, MENU_BTN.y + 1, MENU_BTN.w - 2, MENU_BTN.h - 2, '#4b2f6c');
+    textC('ESC - CHANGE LEVEL', MENU_BTN.y + 4, '#e6dcff', 1, null);
   }
 }
 
@@ -1302,7 +1474,7 @@ function frame(ts) {
 }
 requestAnimationFrame(frame);
 
-window.__fartNinja = { get S() { return S; }, update, draw, press, release, newLevel, STEP, speedAt, distM, scoreNow, musicStep, jungleStep, musicTick, get mus() { return mus; }, get ac() { return ac; } };
+window.__fartNinja = { get S() { return S; }, update, draw, press, release, newLevel, STEP, speedAt, distM, scoreNow, musicStep, jungleStep, menuStep, musicTick, setSel, startRun, toSplash, get mus() { return mus; }, get ac() { return ac; } };
 })();
 </script>
 </body>
